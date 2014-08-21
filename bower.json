@@ -1,0 +1,25 @@
+{
+  "name": "pdf.js-unofficial",
+  "version": "0.0.1",
+  "main": "build/singlefile/build/pdf.combined.js",
+  "ignore": [
+    ".*",
+    "AUTHORS",
+    "CONTRIBUTING.md",
+    "docs",
+    "examples",
+    "extensions",
+    "external",
+    "l10n",
+    "LICENSE",
+    "make.js",
+    "node_modules",
+    "package.json",
+    "pdfjs.config",
+    "README.md",
+    "src",
+    "tags",
+    "test",
+    "web"
+  ]
+}
