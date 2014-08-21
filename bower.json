@@ -1,6 +1,6 @@
 {
   "name": "pdf.js-unofficial",
-  "version": "1.0.473",
+  "version": "1.0.474",
   "main": "build/singlefile/build/pdf.combined.js",
   "ignore": [
     ".*",
