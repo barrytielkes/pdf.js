@@ -26,14 +26,11 @@ var DEFAULT_PREFERENCES = {
   sidebarViewOnLoad: 0,
   enableHandToolOnLoad: false,
   enableWebGL: false,
+  pdfBugEnabled: false,
   disableRange: false,
+  disableStream: false,
   disableAutoFetch: false,
   disableFontFace: false,
-//#if B2G
-//disableTextLayer: true,
-//useOnlyCssZoom: true
-//#else
   disableTextLayer: false,
   useOnlyCssZoom: false
-//#endif
 };

@@ -1,13 +1,14 @@
 /* -*- Mode: Java; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* vim: set shiftwidth=2 tabstop=2 autoindent cindent expandtab: */
-/* globals PDFJS, expect, it, describe, Promise, combineUrl, waitsFor */
+/* globals PDFJS, expect, it, describe, Promise, combineUrl, waitsFor,
+           MissingPDFException, StreamType, FontType */
 
 'use strict';
 
 describe('api', function() {
-  // TODO run with worker enabled
   var basicApiUrl = combineUrl(window.location.href, '../pdfs/basicapi.pdf');
-  function waitsForPromise(promise, successCallback) {
+  var basicApiFileLength = 105779; // bytes
+  function waitsForPromiseResolved(promise, successCallback) {
     var data;
     promise.then(function(val) {
       data = val;
@@ -21,11 +22,25 @@ describe('api', function() {
       return data !== undefined;
     }, 20000);
   }
+  function waitsForPromiseRejected(promise, failureCallback) {
+    var data;
+    promise.then(function(val) {
+      // Shouldn't get here.
+      expect(false).toEqual(true);
+    },
+    function(error) {
+      data = error;
+      failureCallback(data);
+    });
+    waitsFor(function() {
+      return data !== undefined;
+    }, 20000);
+  }
   describe('PDFJS', function() {
     describe('getDocument', function() {
       it('creates pdf doc from URL', function() {
         var promise = PDFJS.getDocument(basicApiUrl);
-        waitsForPromise(promise, function(data) {
+        waitsForPromiseResolved(promise, function(data) {
           expect(true).toEqual(true);
         });
       });
@@ -57,11 +72,19 @@ describe('api', function() {
           typedArrayPdf = new Uint8Array(request.response);
         }
         // Sanity check to make sure that we fetched the entire PDF file.
-        expect(typedArrayPdf.length).toEqual(105779);
+        expect(typedArrayPdf.length).toEqual(basicApiFileLength);
 
         var promise = PDFJS.getDocument(typedArrayPdf);
-        waitsForPromise(promise, function(data) {
+        waitsForPromiseResolved(promise, function(data) {
           expect(true).toEqual(true);
+        });
+      });
+      it('creates pdf doc from non-existent URL', function() {
+        var nonExistentUrl = combineUrl(window.location.href,
+                                        '../pdfs/non-existent.pdf');
+        var promise = PDFJS.getDocument(nonExistentUrl);
+        waitsForPromiseRejected(promise, function(error) {
+          expect(error instanceof MissingPDFException).toEqual(true);
         });
       });
     });
@@ -69,7 +92,7 @@ describe('api', function() {
   describe('PDFDocument', function() {
     var promise = PDFJS.getDocument(basicApiUrl);
     var doc;
-    waitsForPromise(promise, function(data) {
+    waitsForPromiseResolved(promise, function(data) {
       doc = data;
     });
     it('gets number of pages', function() {
@@ -80,7 +103,7 @@ describe('api', function() {
     });
     it('gets page', function() {
       var promise = doc.getPage(1);
-      waitsForPromise(promise, function(data) {
+      waitsForPromiseResolved(promise, function(data) {
         expect(true).toEqual(true);
       });
     });
@@ -88,32 +111,71 @@ describe('api', function() {
       // reference to second page
       var ref = {num: 17, gen: 0};
       var promise = doc.getPageIndex(ref);
-      waitsForPromise(promise, function(pageIndex) {
+      waitsForPromiseResolved(promise, function(pageIndex) {
         expect(pageIndex).toEqual(1);
       });
     });
     it('gets destinations', function() {
       var promise = doc.getDestinations();
-      waitsForPromise(promise, function(data) {
+      waitsForPromiseResolved(promise, function(data) {
         expect(data).toEqual({ chapter1: [{ gen: 0, num: 17 }, { name: 'XYZ' },
                                           0, 841.89, null] });
       });
     });
+    it('gets a destination', function() {
+      var promise = doc.getDestination('chapter1');
+      waitsForPromiseResolved(promise, function(data) {
+        expect(data).toEqual([{ gen: 0, num: 17 }, { name: 'XYZ' },
+                              0, 841.89, null]);
+      });
+    });
+    it('gets a non-existent destination', function() {
+      var promise = doc.getDestination('non-existent-named-destination');
+      waitsForPromiseResolved(promise, function(data) {
+        expect(data).toEqual(null);
+      });
+    });
     it('gets attachments', function() {
       var promise = doc.getAttachments();
-      waitsForPromise(promise, function (data) {
+      waitsForPromiseResolved(promise, function (data) {
         expect(data).toEqual(null);
       });
     });
     it('gets javascript', function() {
       var promise = doc.getJavaScript();
-      waitsForPromise(promise, function (data) {
+      waitsForPromiseResolved(promise, function (data) {
         expect(data).toEqual([]);
+      });
+    });
+    // Keep this in sync with the pattern in viewer.js. The pattern is used to
+    // detect whether or not to automatically start printing.
+    var viewerPrintRegExp = /\bprint\s*\(/;
+    it('gets javascript with printing instructions (Print action)', function() {
+      // PDF document with "Print" Named action in OpenAction
+      var pdfUrl = combineUrl(window.location.href, '../pdfs/bug1001080.pdf');
+      var promise = PDFJS.getDocument(pdfUrl).then(function(doc) {
+        return doc.getJavaScript();
+      });
+      waitsForPromiseResolved(promise, function (data) {
+        expect(data).toEqual(['print({});']);
+        expect(data[0]).toMatch(viewerPrintRegExp);
+      });
+    });
+    it('gets javascript with printing instructions (JS action)', function() {
+      // PDF document with "JavaScript" action in OpenAction
+      var pdfUrl = combineUrl(window.location.href, '../pdfs/issue6106.pdf');
+      var promise = PDFJS.getDocument(pdfUrl).then(function(doc) {
+        return doc.getJavaScript();
+      });
+      waitsForPromiseResolved(promise, function (data) {
+        expect(data).toEqual(
+          ['this.print({bUI:true,bSilent:false,bShrinkToFit:true});']);
+        expect(data[0]).toMatch(viewerPrintRegExp);
       });
     });
     it('gets outline', function() {
       var promise = doc.getOutline();
-      waitsForPromise(promise, function(outline) {
+      waitsForPromiseResolved(promise, function(outline) {
         // Two top level entries.
         expect(outline.length).toEqual(2);
         // Make sure some basic attributes are set.
@@ -124,21 +186,29 @@ describe('api', function() {
     });
     it('gets metadata', function() {
       var promise = doc.getMetadata();
-      waitsForPromise(promise, function(metadata) {
+      waitsForPromiseResolved(promise, function(metadata) {
         expect(metadata.info['Title']).toEqual('Basic API Test');
+        expect(metadata.info['PDFFormatVersion']).toEqual('1.7');
         expect(metadata.metadata.get('dc:title')).toEqual('Basic API Test');
       });
     });
     it('gets data', function() {
       var promise = doc.getData();
-      waitsForPromise(promise, function (data) {
-        expect(true).toEqual(true);
+      waitsForPromiseResolved(promise, function (data) {
+        expect(data instanceof Uint8Array).toEqual(true);
+        expect(data.length).toEqual(basicApiFileLength);
       });
     });
-    it('gets filesize in bytes', function() {
+    it('gets download info', function() {
       var promise = doc.getDownloadInfo();
-      waitsForPromise(promise, function (data) {
-        expect(data.length).toEqual(105779);
+      waitsForPromiseResolved(promise, function (data) {
+        expect(data).toEqual({ length: basicApiFileLength });
+      });
+    });
+    it('gets stats', function() {
+      var promise = doc.getStats();
+      waitsForPromiseResolved(promise, function (stats) {
+        expect(stats).toEqual({ streamTypes: [], fontTypes: [] });
       });
     });
   });
@@ -147,13 +217,15 @@ describe('api', function() {
     var promise = new Promise(function (resolve) {
       resolvePromise = resolve;
     });
+    var pdfDocument;
     PDFJS.getDocument(basicApiUrl).then(function(doc) {
       doc.getPage(1).then(function(data) {
         resolvePromise(data);
       });
+      pdfDocument = doc;
     });
     var page;
-    waitsForPromise(promise, function(data) {
+    waitsForPromiseResolved(promise, function(data) {
       page = data;
     });
     it('gets page number', function () {
@@ -179,13 +251,13 @@ describe('api', function() {
     });
     it('gets annotations', function () {
       var promise = page.getAnnotations();
-      waitsForPromise(promise, function (data) {
+      waitsForPromiseResolved(promise, function (data) {
         expect(data.length).toEqual(4);
       });
     });
     it('gets text content', function () {
       var promise = page.getTextContent();
-      waitsForPromise(promise, function (data) {
+      waitsForPromiseResolved(promise, function (data) {
         expect(!!data.items).toEqual(true);
         expect(data.items.length).toEqual(7);
         expect(!!data.styles).toEqual(true);
@@ -193,10 +265,25 @@ describe('api', function() {
     });
     it('gets operator list', function() {
       var promise = page.getOperatorList();
-      waitsForPromise(promise, function (oplist) {
+      waitsForPromiseResolved(promise, function (oplist) {
         expect(!!oplist.fnArray).toEqual(true);
         expect(!!oplist.argsArray).toEqual(true);
         expect(oplist.lastChunk).toEqual(true);
+      });
+    });
+    it('gets stats after parsing page', function () {
+      var promise = page.getOperatorList().then(function () {
+        return pdfDocument.getStats();
+      });
+      var expectedStreamTypes = [];
+      expectedStreamTypes[StreamType.FLATE] = true;
+      var expectedFontTypes = [];
+      expectedFontTypes[FontType.TYPE1] = true;
+      expectedFontTypes[FontType.CIDFONTTYPE2] = true;
+
+      waitsForPromiseResolved(promise, function (stats) {
+        expect(stats).toEqual({ streamTypes: expectedStreamTypes,
+                                fontTypes: expectedFontTypes });
       });
     });
   });

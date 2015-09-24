@@ -160,24 +160,6 @@ var Preferences = {
   }
 };
 
-//#if B2G
-//Preferences._writeToStorage = function (prefObj) {
-//  return new Promise(function (resolve) {
-//    asyncStorage.setItem('pdfjs.preferences', JSON.stringify(prefObj),
-//                         resolve);
-//  });
-//};
-//
-//Preferences._readFromStorage = function (prefObj) {
-//  return new Promise(function (resolve) {
-//    asyncStorage.getItem('pdfjs.preferences', function (prefStr) {
-//      var readPrefs = JSON.parse(prefStr);
-//      resolve(readPrefs);
-//    });
-//  });
-//};
-//#endif
-
 //#if CHROME
 //Preferences._writeToStorage = function (prefObj) {
 //  return new Promise(function (resolve) {
@@ -204,11 +186,15 @@ var Preferences = {
 //      // These preferences can be overridden by the user.
 //      chrome.storage.managed.get(DEFAULT_PREFERENCES, getPreferences);
 //    } else {
-//      // Managed storage not supported, e.g. in Opera.
+//      // Managed storage not supported, e.g. in old Chromium versions.
 //      getPreferences(DEFAULT_PREFERENCES);
 //    }
 //
 //    function getPreferences(defaultPrefs) {
+//      if (chrome.runtime.lastError) {
+//        // Managed storage not supported, e.g. in Opera.
+//        defaultPrefs = DEFAULT_PREFERENCES;
+//      }
 //      chrome.storage.local.get(defaultPrefs, function(readPrefs) {
 //        resolve(readPrefs);
 //      });
@@ -217,7 +203,7 @@ var Preferences = {
 //};
 //#endif
 
-//#if !(FIREFOX || MOZCENTRAL || B2G || CHROME)
+//#if !(FIREFOX || MOZCENTRAL || CHROME)
 Preferences._writeToStorage = function (prefObj) {
   return new Promise(function (resolve) {
     localStorage.setItem('pdfjs.preferences', JSON.stringify(prefObj));

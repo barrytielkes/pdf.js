@@ -26,9 +26,17 @@
 
 // Minimal font size that would be used during canvas fillText operations.
 var MIN_FONT_SIZE = 16;
+// Maximum font size that would be used during canvas fillText operations.
+var MAX_FONT_SIZE = 100;
 var MAX_GROUP_SIZE = 4096;
 
+// Heuristic value used when enforcing minimum line widths.
+var MIN_WIDTH_FACTOR = 0.65;
+
 var COMPILE_TYPE3_GLYPHS = true;
+var MAX_SIZE_TO_COMPILE = 1000;
+
+var FULL_CHUNK_HEIGHT = 16;
 
 function createScratchCanvas(width, height) {
   var canvas = document.createElement('canvas');
@@ -38,11 +46,8 @@ function createScratchCanvas(width, height) {
 }
 
 function addContextCurrentTransform(ctx) {
-  // If the context doesn't expose a `mozCurrentTransform`, add a JS based on.
+  // If the context doesn't expose a `mozCurrentTransform`, add a JS based one.
   if (!ctx.mozCurrentTransform) {
-    // Store the original context
-    ctx._scaleX = ctx._scaleX || 1.0;
-    ctx._scaleY = ctx._scaleY || 1.0;
     ctx._originalSave = ctx.save;
     ctx._originalRestore = ctx.restore;
     ctx._originalRotate = ctx.rotate;
@@ -51,7 +56,7 @@ function addContextCurrentTransform(ctx) {
     ctx._originalTransform = ctx.transform;
     ctx._originalSetTransform = ctx.setTransform;
 
-    ctx._transformMatrix = [ctx._scaleX, 0, 0, ctx._scaleY, 0, 0];
+    ctx._transformMatrix = ctx._transformMatrix || [1, 0, 0, 1, 0, 0];
     ctx._transformStack = [];
 
     Object.defineProperty(ctx, 'mozCurrentTransform', {
@@ -162,7 +167,7 @@ var CachedCanvases = (function CachedCanvasesClosure() {
     getCanvas: function CachedCanvases_getCanvas(id, width, height,
                                                  trackTransform) {
       var canvasEntry;
-      if (id in cache) {
+      if (cache[id] !== undefined) {
         canvasEntry = cache[id];
         canvasEntry.canvas.width = width;
         canvasEntry.canvas.height = height;
@@ -376,6 +381,7 @@ var CanvasExtraState = (function CanvasExtraStateClosure() {
     // Default fore and background colors
     this.fillColor = '#000000';
     this.strokeColor = '#000000';
+    this.patternFill = false;
     // Note: fill alpha applies to all non-stroking operations
     this.fillAlpha = 1;
     this.strokeAlpha = 1;
@@ -426,8 +432,11 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
     this.smaskCounter = 0;
     this.tempSMask = null;
     if (canvasCtx) {
+      // NOTE: if mozCurrentTransform is polyfilled, then the current state of
+      // the transformation must already be set in canvasCtx._transformMatrix.
       addContextCurrentTransform(canvasCtx);
     }
+    this.cachedGetSinglePixelWidth = null;
   }
 
   function putBinaryImageData(ctx, imgData) {
@@ -448,13 +457,11 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
     // that's ok; any such pixels are ignored.
 
     var height = imgData.height, width = imgData.width;
-    var fullChunkHeight = 16;
-    var fracChunks = height / fullChunkHeight;
-    var fullChunks = Math.floor(fracChunks);
-    var totalChunks = Math.ceil(fracChunks);
-    var partialChunkHeight = height - fullChunks * fullChunkHeight;
+    var partialChunkHeight = height % FULL_CHUNK_HEIGHT;
+    var fullChunks = (height - partialChunkHeight) / FULL_CHUNK_HEIGHT;
+    var totalChunks = partialChunkHeight === 0 ? fullChunks : fullChunks + 1;
 
-    var chunkImgData = ctx.createImageData(width, fullChunkHeight);
+    var chunkImgData = ctx.createImageData(width, FULL_CHUNK_HEIGHT);
     var srcPos = 0, destPos;
     var src = imgData.data;
     var dest = chunkImgData.data;
@@ -474,7 +481,7 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
         0xFF000000 : 0x000000FF;
       for (i = 0; i < totalChunks; i++) {
         thisChunkHeight =
-          (i < fullChunks) ? fullChunkHeight : partialChunkHeight;
+          (i < fullChunks) ? FULL_CHUNK_HEIGHT : partialChunkHeight;
         destPos = 0;
         for (j = 0; j < thisChunkHeight; j++) {
           var srcDiff = srcLength - srcPos;
@@ -509,19 +516,19 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
           dest32[destPos++] = 0;
         }
 
-        ctx.putImageData(chunkImgData, 0, i * fullChunkHeight);
+        ctx.putImageData(chunkImgData, 0, i * FULL_CHUNK_HEIGHT);
       }
     } else if (imgData.kind === ImageKind.RGBA_32BPP) {
       // RGBA, 32-bits per pixel.
 
       j = 0;
-      elemsInThisChunk = width * fullChunkHeight * 4;
+      elemsInThisChunk = width * FULL_CHUNK_HEIGHT * 4;
       for (i = 0; i < fullChunks; i++) {
         dest.set(src.subarray(srcPos, srcPos + elemsInThisChunk));
         srcPos += elemsInThisChunk;
 
         ctx.putImageData(chunkImgData, 0, j);
-        j += fullChunkHeight;
+        j += FULL_CHUNK_HEIGHT;
       }
       if (i < totalChunks) {
         elemsInThisChunk = width * partialChunkHeight * 4;
@@ -531,11 +538,11 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
 
     } else if (imgData.kind === ImageKind.RGB_24BPP) {
       // RGB, 24-bits per pixel.
-      thisChunkHeight = fullChunkHeight;
+      thisChunkHeight = FULL_CHUNK_HEIGHT;
       elemsInThisChunk = width * thisChunkHeight;
       for (i = 0; i < totalChunks; i++) {
         if (i >= fullChunks) {
-          thisChunkHeight =partialChunkHeight;
+          thisChunkHeight = partialChunkHeight;
           elemsInThisChunk = width * thisChunkHeight;
         }
 
@@ -546,7 +553,7 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
           dest[destPos++] = src[srcPos++];
           dest[destPos++] = 255;
         }
-        ctx.putImageData(chunkImgData, 0, i * fullChunkHeight);
+        ctx.putImageData(chunkImgData, 0, i * FULL_CHUNK_HEIGHT);
       }
     } else {
       error('bad image kind: ' + imgData.kind);
@@ -555,20 +562,18 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
 
   function putBinaryImageMask(ctx, imgData) {
     var height = imgData.height, width = imgData.width;
-    var fullChunkHeight = 16;
-    var fracChunks = height / fullChunkHeight;
-    var fullChunks = Math.floor(fracChunks);
-    var totalChunks = Math.ceil(fracChunks);
-    var partialChunkHeight = height - fullChunks * fullChunkHeight;
+    var partialChunkHeight = height % FULL_CHUNK_HEIGHT;
+    var fullChunks = (height - partialChunkHeight) / FULL_CHUNK_HEIGHT;
+    var totalChunks = partialChunkHeight === 0 ? fullChunks : fullChunks + 1;
 
-    var chunkImgData = ctx.createImageData(width, fullChunkHeight);
+    var chunkImgData = ctx.createImageData(width, FULL_CHUNK_HEIGHT);
     var srcPos = 0;
     var src = imgData.data;
     var dest = chunkImgData.data;
 
     for (var i = 0; i < totalChunks; i++) {
       var thisChunkHeight =
-        (i < fullChunks) ? fullChunkHeight : partialChunkHeight;
+        (i < fullChunks) ? FULL_CHUNK_HEIGHT : partialChunkHeight;
 
       // Expand the mask so it can be used by the canvas.  Any required
       // inversion has already been handled.
@@ -585,7 +590,7 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
           mask >>= 1;
         }
       }
-      ctx.putImageData(chunkImgData, 0, i * fullChunkHeight);
+      ctx.putImageData(chunkImgData, 0, i * FULL_CHUNK_HEIGHT);
     }
   }
 
@@ -595,14 +600,14 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
                       'globalCompositeOperation', 'font'];
     for (var i = 0, ii = properties.length; i < ii; i++) {
       var property = properties[i];
-      if (property in sourceCtx) {
+      if (sourceCtx[property] !== undefined) {
         destCtx[property] = sourceCtx[property];
       }
     }
-    if ('setLineDash' in sourceCtx) {
+    if (sourceCtx.setLineDash !== undefined) {
       destCtx.setLineDash(sourceCtx.getLineDash());
       destCtx.lineDashOffset =  sourceCtx.lineDashOffset;
-    } else if ('mozDash' in sourceCtx) {
+    } else if (sourceCtx.mozDashOffset !== undefined) {
       destCtx.mozDash = sourceCtx.mozDash;
       destCtx.mozDashOffset = sourceCtx.mozDashOffset;
     }
@@ -637,9 +642,9 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
   function composeSMaskLuminosity(maskData, layerData) {
     var length = maskData.length;
     for (var i = 3; i < length; i += 4) {
-      var y = ((maskData[i - 3] * 77) +     // * 0.3 / 255 * 0x10000
-               (maskData[i - 2] * 152) +    // * 0.59 ....
-               (maskData[i - 1] * 28)) | 0; // * 0.11 ....
+      var y = (maskData[i - 3] * 77) +  // * 0.3 / 255 * 0x10000
+              (maskData[i - 2] * 152) + // * 0.59 ....
+              (maskData[i - 1] * 28);   // * 0.11 ....
       layerData[i] = (layerData[i] * y) >> 16;
     }
   }
@@ -659,7 +664,7 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
     }
 
     // processing image in chunks to save memory
-    var PIXELS_TO_PROCESS = 65536;
+    var PIXELS_TO_PROCESS = 1048576;
     var chunkSize = Math.min(height, Math.ceil(PIXELS_TO_PROCESS / width));
     for (var row = 0; row < height; row += chunkSize) {
       var chunkHeight = Math.min(chunkSize, height - row);
@@ -829,7 +834,7 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
     },
     setDash: function CanvasGraphics_setDash(dashArray, dashPhase) {
       var ctx = this.ctx;
-      if ('setLineDash' in ctx) {
+      if (ctx.setLineDash !== undefined) {
         ctx.setLineDash(dashArray);
         ctx.lineDashOffset = dashPhase;
       } else {
@@ -964,10 +969,17 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
 
         this.current = this.stateStack.pop();
         this.ctx.restore();
+
+        // Ensure that the clipping path is reset (fixes issue6413.pdf).
+        this.pendingClip = null;
+
+        this.cachedGetSinglePixelWidth = null;
       }
     },
     transform: function CanvasGraphics_transform(a, b, c, d, e, f) {
       this.ctx.transform(a, b, c, d, e, f);
+
+      this.cachedGetSinglePixelWidth = null;
     },
 
     // Path
@@ -1041,9 +1053,9 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
       consumePath = typeof consumePath !== 'undefined' ? consumePath : true;
       var ctx = this.ctx;
       var strokeColor = this.current.strokeColor;
-      if (this.current.lineWidth === 0) {
-        ctx.lineWidth = this.getSinglePixelWidth();
-      }
+      // Prevent drawing too thin lines by enforcing a minimum line width.
+      ctx.lineWidth = Math.max(this.getSinglePixelWidth() * MIN_WIDTH_FACTOR,
+                               this.current.lineWidth);
       // For stroke we want to temporarily change the global alpha to the
       // stroking alpha.
       ctx.globalAlpha = this.current.strokeAlpha;
@@ -1072,10 +1084,10 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
       consumePath = typeof consumePath !== 'undefined' ? consumePath : true;
       var ctx = this.ctx;
       var fillColor = this.current.fillColor;
+      var isPatternFill = this.current.patternFill;
       var needRestore = false;
 
-      if (fillColor && fillColor.hasOwnProperty('type') &&
-          fillColor.type === 'Pattern') {
+      if (isPatternFill) {
         ctx.save();
         ctx.fillStyle = fillColor.getPattern(ctx, this);
         needRestore = true;
@@ -1216,7 +1228,7 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
       }
 
       var name = fontObj.loadedName || 'sans-serif';
-      var bold = fontObj.black ? (fontObj.bold ? 'bolder' : 'bold') :
+      var bold = fontObj.black ? (fontObj.bold ? '900' : 'bold') :
                                  (fontObj.bold ? 'bold' : 'normal');
 
       var italic = fontObj.italic ? 'italic' : 'normal';
@@ -1226,9 +1238,9 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
       // Keeping the font at minimal size and using the fontSizeScale to change
       // the current transformation matrix before the fillText/strokeText.
       // See https://bugzilla.mozilla.org/show_bug.cgi?id=726227
-      var browserFontSize = size >= MIN_FONT_SIZE ? size : MIN_FONT_SIZE;
-      this.current.fontSizeScale = browserFontSize !== MIN_FONT_SIZE ? 1.0 :
-                                   size / MIN_FONT_SIZE;
+      var browserFontSize = size < MIN_FONT_SIZE ? MIN_FONT_SIZE :
+                            size > MAX_FONT_SIZE ? MAX_FONT_SIZE : size;
+      this.current.fontSizeScale = size / browserFontSize;
 
       var rule = italic + ' ' + bold + ' ' + browserFontSize + 'px ' + typeface;
       this.ctx.font = rule;
@@ -1348,6 +1360,7 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
       var textHScale = current.textHScale * fontDirection;
       var glyphsLength = glyphs.length;
       var vertical = font.vertical;
+      var spacingDir = vertical ? 1 : -1;
       var defaultVMetrics = font.defaultVMetrics;
       var widthAdvanceScale = fontSize * current.fontMatrix[0];
 
@@ -1368,7 +1381,13 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
       var lineWidth = current.lineWidth;
       var scale = current.textMatrixScale;
       if (scale === 0 || lineWidth === 0) {
-        lineWidth = this.getSinglePixelWidth();
+        var fillStrokeMode = current.textRenderingMode &
+          TextRenderingMode.FILL_STROKE_MASK;
+        if (fillStrokeMode === TextRenderingMode.STROKE ||
+            fillStrokeMode === TextRenderingMode.FILL_STROKE) {
+          this.cachedGetSinglePixelWidth = null;
+          lineWidth = this.getSinglePixelWidth() * MIN_WIDTH_FACTOR;
+        }
       } else {
         lineWidth /= scale;
       }
@@ -1388,7 +1407,7 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
           x += fontDirection * wordSpacing;
           continue;
         } else if (isNum(glyph)) {
-          x += -glyph * fontSize * 0.001;
+          x += spacingDir * glyph * fontSize / 1000;
           continue;
         }
 
@@ -1458,16 +1477,20 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
       var font = current.font;
       var fontSize = current.fontSize;
       var fontDirection = current.fontDirection;
+      var spacingDir = font.vertical ? 1 : -1;
       var charSpacing = current.charSpacing;
       var wordSpacing = current.wordSpacing;
       var textHScale = current.textHScale * fontDirection;
       var fontMatrix = current.fontMatrix || FONT_IDENTITY_MATRIX;
       var glyphsLength = glyphs.length;
-      var i, glyph, width;
+      var isTextInvisible =
+        current.textRenderingMode === TextRenderingMode.INVISIBLE;
+      var i, glyph, width, spacingLength;
 
-      if (fontSize === 0) {
+      if (isTextInvisible || fontSize === 0) {
         return;
       }
+      this.cachedGetSinglePixelWidth = null;
 
       ctx.save();
       ctx.transform.apply(ctx, current.textMatrix);
@@ -1483,7 +1506,7 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
           current.x += wordSpacing * textHScale;
           continue;
         } else if (isNum(glyph)) {
-          var spacingLength = -glyph * 0.001 * fontSize;
+          spacingLength = spacingDir * glyph * fontSize / 1000;
           this.ctx.translate(spacingLength, 0);
           current.x += spacingLength * textHScale;
           continue;
@@ -1547,16 +1570,18 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
     },
     setFillColorN: function CanvasGraphics_setFillColorN(/*...*/) {
       this.current.fillColor = this.getColorN_Pattern(arguments);
+      this.current.patternFill = true;
     },
     setStrokeRGBColor: function CanvasGraphics_setStrokeRGBColor(r, g, b) {
-      var color = Util.makeCssRgb(arguments);
+      var color = Util.makeCssRgb(r, g, b);
       this.ctx.strokeStyle = color;
       this.current.strokeColor = color;
     },
     setFillRGBColor: function CanvasGraphics_setFillRGBColor(r, g, b) {
-      var color = Util.makeCssRgb(arguments);
+      var color = Util.makeCssRgb(r, g, b);
       this.ctx.fillStyle = color;
       this.current.fillColor = color;
+      this.current.patternFill = false;
     },
 
     shadingFill: function CanvasGraphics_shadingFill(patternIR) {
@@ -1815,11 +1840,12 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
     paintImageMaskXObject: function CanvasGraphics_paintImageMaskXObject(img) {
       var ctx = this.ctx;
       var width = img.width, height = img.height;
+      var fillColor = this.current.fillColor;
+      var isPatternFill = this.current.patternFill;
 
       var glyph = this.processingType3;
 
-      if (COMPILE_TYPE3_GLYPHS && glyph && !('compiled' in glyph)) {
-        var MAX_SIZE_TO_COMPILE = 1000;
+      if (COMPILE_TYPE3_GLYPHS && glyph && glyph.compiled === undefined) {
         if (width <= MAX_SIZE_TO_COMPILE && height <= MAX_SIZE_TO_COMPILE) {
           glyph.compiled =
             compileType3Glyph({data: img.data, width: width, height: height});
@@ -1841,9 +1867,7 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
 
       maskCtx.globalCompositeOperation = 'source-in';
 
-      var fillColor = this.current.fillColor;
-      maskCtx.fillStyle = (fillColor && fillColor.hasOwnProperty('type') &&
-                          fillColor.type === 'Pattern') ?
+      maskCtx.fillStyle = isPatternFill ?
                           fillColor.getPattern(maskCtx, this) : fillColor;
       maskCtx.fillRect(0, 0, width, height);
 
@@ -1857,7 +1881,8 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
                                                           scaleY, positions) {
       var width = imgData.width;
       var height = imgData.height;
-      var ctx = this.ctx;
+      var fillColor = this.current.fillColor;
+      var isPatternFill = this.current.patternFill;
 
       var maskCanvas = CachedCanvases.getCanvas('maskCanvas', width, height);
       var maskCtx = maskCanvas.context;
@@ -1867,14 +1892,13 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
 
       maskCtx.globalCompositeOperation = 'source-in';
 
-      var fillColor = this.current.fillColor;
-      maskCtx.fillStyle = (fillColor && fillColor.hasOwnProperty('type') &&
-        fillColor.type === 'Pattern') ?
-        fillColor.getPattern(maskCtx, this) : fillColor;
+      maskCtx.fillStyle = isPatternFill ?
+                          fillColor.getPattern(maskCtx, this) : fillColor;
       maskCtx.fillRect(0, 0, width, height);
 
       maskCtx.restore();
 
+      var ctx = this.ctx;
       for (var i = 0, ii = positions.length; i < ii; i += 2) {
         ctx.save();
         ctx.transform(scaleX, 0, 0, scaleY, positions[i], positions[i + 1]);
@@ -1889,6 +1913,8 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
       function CanvasGraphics_paintImageMaskXObjectGroup(images) {
       var ctx = this.ctx;
 
+      var fillColor = this.current.fillColor;
+      var isPatternFill = this.current.patternFill;
       for (var i = 0, ii = images.length; i < ii; i++) {
         var image = images[i];
         var width = image.width, height = image.height;
@@ -1901,9 +1927,7 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
 
         maskCtx.globalCompositeOperation = 'source-in';
 
-        var fillColor = this.current.fillColor;
-        maskCtx.fillStyle = (fillColor && fillColor.hasOwnProperty('type') &&
-                            fillColor.type === 'Pattern') ?
+        maskCtx.fillStyle = isPatternFill ?
                             fillColor.getPattern(maskCtx, this) : fillColor;
         maskCtx.fillRect(0, 0, width, height);
 
@@ -2106,11 +2130,14 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
       ctx.beginPath();
     },
     getSinglePixelWidth: function CanvasGraphics_getSinglePixelWidth(scale) {
-      var inverse = this.ctx.mozCurrentTransformInverse;
-      // max of the current horizontal and vertical scale
-      return Math.sqrt(Math.max(
-        (inverse[0] * inverse[0] + inverse[1] * inverse[1]),
-        (inverse[2] * inverse[2] + inverse[3] * inverse[3])));
+      if (this.cachedGetSinglePixelWidth === null) {
+        var inverse = this.ctx.mozCurrentTransformInverse;
+        // max of the current horizontal and vertical scale
+        this.cachedGetSinglePixelWidth = Math.sqrt(Math.max(
+          (inverse[0] * inverse[0] + inverse[1] * inverse[1]),
+          (inverse[2] * inverse[2] + inverse[3] * inverse[3])));
+      }
+      return this.cachedGetSinglePixelWidth;
     },
     getCanvasPosition: function CanvasGraphics_getCanvasPosition(x, y) {
         var transform = this.ctx.mozCurrentTransform;
@@ -2127,4 +2154,3 @@ var CanvasGraphics = (function CanvasGraphicsClosure() {
 
   return CanvasGraphics;
 })();
-

@@ -364,7 +364,10 @@ var PDFFunction = (function PDFFunctionClosure() {
         var rmin = encode[2 * i];
         var rmax = encode[2 * i + 1];
 
-        tmpBuf[0] = rmin + (v - dmin) * (rmax - rmin) / (dmax - dmin);
+        // Prevent the value from becoming NaN as a result
+        // of division by zero (fixes issue6113.pdf).
+        tmpBuf[0] = dmin === dmax ? rmin :
+                    rmin + (v - dmin) * (rmax - rmin) / (dmax - dmin);
 
         // call the appropriate function
         fns[i](tmpBuf, 0, dest, destOffset);
@@ -433,7 +436,7 @@ var PDFFunction = (function PDFFunctionClosure() {
 
         var cachedValue = cache[key];
         if (cachedValue !== undefined) {
-          cachedValue.set(dest, destOffset);
+          dest.set(cachedValue, destOffset);
           return;
         }
 
@@ -457,7 +460,7 @@ var PDFFunction = (function PDFFunctionClosure() {
           cache_available--;
           cache[key] = output;
         }
-        output.set(dest, destOffset);
+        dest.set(output, destOffset);
       };
     }
   };
