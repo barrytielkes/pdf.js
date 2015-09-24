@@ -1,7 +1,10 @@
 {
-  "name": "pdf.js-unofficial",
-  "version": "1.0.474",
-  "main": "build/singlefile/build/pdf.combined.js",
+  "name": "pdf.js-with-viewer",
+  "version": "1.0.0",
+  "description": "a clone of PDF.js with bower",
+  "main": [
+    "build/singlefile/build/pdf.combined.js"
+  ],
   "ignore": [
     ".*",
     "AUTHORS",
@@ -19,7 +22,6 @@
     "README.md",
     "src",
     "tags",
-    "test",
-    "web"
+    "test"
   ]
 }
