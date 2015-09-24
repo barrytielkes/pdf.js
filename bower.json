@@ -19,7 +19,6 @@
     "package.json",
     "pdfjs.config",
     "README.md",
-    "src/core",
     "src/images",
     "tags",
     "test"
