@@ -12,7 +12,6 @@
     "docs",
     "examples",
     "extensions",
-    "external",
     "l10n",
     "LICENSE",
     "make.js",
@@ -20,7 +19,8 @@
     "package.json",
     "pdfjs.config",
     "README.md",
-    "src",
+    "src/core",
+    "src/images",
     "tags",
     "test"
   ]
